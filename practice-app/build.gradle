@@ -1,0 +1,21 @@
+subprojects {
+    apply plugin: 'java'
+    apply plugin: 'maven-publish'
+    group = 'local.example'
+    version = '0.0.1'
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+    repositories { mavenCentral() }
+
+    publishing {
+        publications {
+            jarDeploy(MavenPublication) { from components.java }
+        }
+    }
+
+    // 회사의 buildArchives 흉내: jar 를 <모듈>/dist 로 복사
+    task buildArchives(type: Copy, dependsOn: jar) {
+        from jar.archiveFile
+        into "$projectDir/dist"
+    }
+}

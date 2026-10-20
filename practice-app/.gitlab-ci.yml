@@ -1,0 +1,68 @@
+image: gradle:7.6.4-jdk8   # 회사: bpi-docker-gradle:latest
+variables:
+  CHANGED_PROJECTS: ""
+  PROJECT_LIST: "base-core mod-a mod-b mod-c"   # 회사는 GitLab CI 변수 또는 별도 설정으로 관리
+  BASE_PROJECTS: "base-core"                    # 먼저 publish 해야 하는 공통 모듈
+
+include:
+  - project: 'personal_projects-group2/practice-ci-common'   # ← 실제 그룹 경로로 확인/수정
+    ref: main
+    file: 'ci/app/app-gitlab-ci.yml'
+
+##############
+# Stages
+##############
+
+stages:
+  - compile
+  - publish
+  - deploy
+  - merge
+
+# compile
+compile:feature:
+  stage: compile
+  extends:
+    - .compile:feature
+
+compile:only:
+  stage: compile
+  extends:
+    - .compile:only
+
+compile:artifacts:
+  stage: compile
+  extends:
+    - .compile:artifacts
+
+# publish
+publish:artifactory:
+  stage: publish
+  extends:
+    - .publish:artifactory
+
+publish:registry:
+  stage: publish
+  extends:
+    - .publish:registry
+
+# deploy
+deploy:dev:
+  stage: deploy
+  extends:
+    - .deploy:dev
+
+deploy:uat:
+  stage: deploy
+  extends:
+    - .deploy:uat
+
+deploy:prod:
+  stage: deploy
+  extends:
+    - .deploy:prod
+
+merge:release:
+  stage: merge
+  extends:
+    - .merge:release

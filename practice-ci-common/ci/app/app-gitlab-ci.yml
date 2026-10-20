@@ -1,0 +1,170 @@
+# 회사 bpi-devops-common/ci/app/app-gitlab-ci.yml 의 실습용 단순화 버전
+# (Artifactory / Jenkins / Trivy / mavenLocalFirst init / 서버 주소 등은 제거)
+
+variables:
+  GIT_STRATEGY: fetch
+  GIT_DEPTH: 500
+
+####################
+### Anchor
+####################
+
+# 변경된 모듈만 찾기: 결과는 CHANGED_PROJECTS 변수에 담김
+.check_changed_projects: &check_changed_projects |
+  #!/bin/bash
+
+  echo "> CI_COMMIT_BEFORE_SHA: $CI_COMMIT_BEFORE_SHA"
+  echo "> CI_COMMIT_SHA: $CI_COMMIT_SHA"
+
+  if [[ -z "${CI_COMMIT_BEFORE_SHA}" || "${CI_COMMIT_BEFORE_SHA}" == "0000000000000000000000000000000000000000" ]]; then
+    echo "▶ 첫 push (또는 새 브랜치) → CI_COMMIT_SHA 하나만 비교"
+    RAW_CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r "$CI_COMMIT_SHA" || true)
+  else
+    git fetch origin "$CI_COMMIT_BEFORE_SHA" || true
+    echo "▶ Comparing $CI_COMMIT_BEFORE_SHA and $CI_COMMIT_SHA"
+    RAW_CHANGED_FILES=$(git diff --name-only "$CI_COMMIT_BEFORE_SHA" "$CI_COMMIT_SHA" || true)
+  fi
+
+  echo "------------------------------------------------------------"
+  echo "Changed files :"
+  echo "${RAW_CHANGED_FILES}"
+  echo "------------------------------------------------------------"
+
+  if [[ -z "${RAW_CHANGED_FILES}" ]]; then
+    echo "▶ No changed files !!"
+    exit 0
+  fi
+
+  # 최상위 폴더만 뽑기
+  RAW_CHANGED_DIRS=$(printf "%s\n" "$RAW_CHANGED_FILES" | cut -d/ -f1 | sort -u)
+
+  # PROJECT_LIST 와의 교집합
+  CHANGED_PROJECTS=$(printf "%s\n" ${RAW_CHANGED_DIRS} \
+    | grep -xF -f <(printf "%s\n" ${PROJECT_LIST}) \
+    | xargs || true)
+
+  if [[ -z "${CHANGED_PROJECTS}" ]]; then
+    echo "No changed projects to build !"
+    exit 0
+  fi
+
+  echo "Build Project List : ${CHANGED_PROJECTS}"
+
+# feature 브랜치: base 모듈 publish → 변경된 모듈 compile
+.compile: &sub_gradle |
+  #!/bin/bash
+
+  echo "# Branch=${CI_COMMIT_REF_NAME}, Source=${CI_PIPELINE_SOURCE}"
+  echo "# CHANGED_PROJECTS=${CHANGED_PROJECTS:-}"
+
+  if [[ -z "${CHANGED_PROJECTS:-}" ]]; then
+    echo ">>>> No subprojects changed, skip !!"
+    exit 0
+  fi
+
+  TASKS=()
+  for b in $BASE_PROJECTS; do
+    [[ -n "$b" ]] && TASKS+=(":${b}:publishToMavenLocal")
+  done
+  if [[ ${#TASKS[@]} -gt 0 ]]; then
+    echo "> Publishing bases: ${TASKS[*]}"
+    gradle --stacktrace "${TASKS[@]}"
+  fi
+
+  TASKS=()
+  for sub in $CHANGED_PROJECTS; do
+    [[ -n "$sub" ]] && TASKS+=(":${sub}:compileJava")
+  done
+  echo "> Gradle : ${TASKS[*]}"
+  gradle --stacktrace "${TASKS[@]}" --continue --parallel
+
+####################
+### Extends
+####################
+
+# feature / bugfix push → 변경 모듈만 compile
+.compile:feature:
+  only:
+    - /^feature.*$/
+    - /^bugfix.*$/
+  before_script:
+    - echo "====== Starting Check Change Projects ======"
+    - *check_changed_projects
+  script:
+    - echo "====== Starting Change Projects Gradle Compile ======"
+    - *sub_gradle
+
+# main push → 루트 전체 compile
+.compile:only:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+  script:
+    - echo "====== Starting Root Projects Gradle Compile ======"
+    - gradle compileJava --continue --parallel
+
+# dev / uat push, v1.2.3 형태 태그 → 루트 전체 빌드 + jar 산출물 보관
+.compile:artifacts:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_COMMIT_BRANCH == "uat" && $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_COMMIT_TAG && $CI_COMMIT_REF_NAME =~ /^v\d+\.\d+\.\d+(\.[a-zA-Z0-9]+)?$/
+  script:
+    - echo "====== Starting Root Project Gradle Build ======"
+    - gradle buildArchives --continue --parallel
+  artifacts:
+    expire_in: 1 days
+    when: always
+    paths:
+      - '**/dist/*.jar'
+
+# --- 아래는 5~6단계 전까지 echo 로만 흉내 (회사: Artifactory / Jenkins / git merge) ---
+
+.publish:artifactory:
+  needs:
+    - compile:artifacts
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_COMMIT_BRANCH == "uat" && $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_COMMIT_TAG && $CI_COMMIT_REF_NAME =~ /^v\d+\.\d+\.\d+(\.[a-zA-Z0-9]+)?$/
+  script:
+    - echo "====== (모의) Upload Artifactory ======"
+    - ls -R . | grep -E 'dist|\.jar' || true
+
+.publish:registry:
+  needs:
+    - compile:artifacts
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "schedule"
+  script:
+    - echo "====== (모의) Upload Registry ======"
+
+.deploy:dev:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "schedule"
+  script:
+    - echo "====== (모의) Call DEV Deploy Jenkins ======"
+
+.deploy:uat:
+  needs:
+    - publish:artifactory
+  rules:
+    - if: $CI_COMMIT_BRANCH == "uat" && $CI_PIPELINE_SOURCE == "push"
+  script:
+    - echo "====== (모의) Call UAT Deploy Jenkins ======"
+
+.deploy:prod:
+  needs:
+    - publish:artifactory
+  rules:
+    - if: $CI_COMMIT_TAG && $CI_COMMIT_REF_NAME =~ /^v\d+\.\d+\.\d+(\.[a-zA-Z0-9]+)?$/
+  script:
+    - echo "====== (모의) Call PROD Deploy Jenkins ======"
+
+.merge:release:
+  needs:
+    - deploy:prod
+  rules:
+    - if: $CI_COMMIT_TAG && $CI_COMMIT_REF_NAME =~ /^v\d+\.\d+\.\d+(\.[a-zA-Z0-9]+)?$/
+  allow_failure: true
+  script:
+    - echo "====== (모의) Merge main → dev, uat ======"
