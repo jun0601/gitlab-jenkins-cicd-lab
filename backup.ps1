@@ -3,6 +3,8 @@
 #
 # 최초 1회:  .\backup.ps1 -UserName "이름" -UserEmail "메일" -RemoteUrl "https://github.com/<계정>/gitlab-jenkins-cicd-lab.git"
 # 이후:      .\backup.ps1
+#powershell -ExecutionPolicy Bypass -File .\backup.ps1
+
 
 param(
     [string]$UserName,

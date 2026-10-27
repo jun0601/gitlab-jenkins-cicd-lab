@@ -5,3 +5,4 @@
 4. 수정: `release*` 브랜치도 compile:feature 가 돌게 하려면?
 5. 수정: PROJECT_LIST 에서 mod-c 를 빼고 push 하면 로그가 어떻게 달라지나?
 6. 일부러 깨기: mod-a 에 문법 오류를 넣고 feature 브랜치로 push → 실패 로그에서 원인 줄 찾기
+진행중
